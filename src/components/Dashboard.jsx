@@ -1,12 +1,70 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+import { 
+  getTodasManutencoes, 
+  getTodosCaminhoes,
+  getManutencoesMarcadas,
+  calcularGastoTotal,
+  formatarData,
+  formatarDataCurta,
+  agruparGastosPorTipo,
+  getVeiculoMaisProblemas,
+  getManutencoesMesAtual,
+  getAlertasCaminhao
+} from '../Utils/ManipuladorApi'
 
 function Dashboard() {
   const [currentDate, setCurrentDate] = useState(new Date())
+  const [manutencoes, setManutencoes] = useState([])
+  const [caminhoes, setCaminhoes] = useState([])
+  const [alertas, setAlertas] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   
   const monthNames = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
   ]
+  
+  // Carregar dados da API
+  useEffect(() => {
+    const carregarDados = async () => {
+      try {
+        setLoading(true)
+        
+        // Buscar todas as manutenções
+        const manutencoesData = await getTodasManutencoes()
+        setManutencoes(manutencoesData || [])
+        
+        // Buscar todos os caminhões
+        const caminhoesData = await getTodosCaminhoes()
+        setCaminhoes(caminhoesData || [])
+        
+        // Buscar alertas de todos os caminhões
+        if (caminhoesData && caminhoesData.length > 0) {
+          const todosAlertas = []
+          for (const caminhao of caminhoesData.slice(0, 3)) {
+            try {
+              const alertasCaminhao = await getAlertasCaminhao(caminhao.id)
+              todosAlertas.push(...(alertasCaminhao || []))
+            } catch (err) {
+              console.log(`Alertas não disponíveis para caminhão ${caminhao.id}`)
+            }
+          }
+          setAlertas(todosAlertas)
+        }
+        
+        setError(null)
+      } catch (err) {
+        console.error('Erro ao carregar dados:', err)
+        // Não mostra erro se está usando dados mockados
+        setError(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    carregarDados()
+  }, [])
   
   const getMonthData = (date) => {
     const year = date.getFullYear()
@@ -26,8 +84,55 @@ function Dashboard() {
     })
   }
   
+  // Verificar se há manutenção em um dia específico
+  const getManutencaoDia = (dia) => {
+    const { year, month } = getMonthData(currentDate)
+    return manutencoes.filter(m => {
+      const dataInicio = new Date(m.dataInicio)
+      return dataInicio.getDate() === dia && 
+             dataInicio.getMonth() === month && 
+             dataInicio.getFullYear() === year
+    })
+  }
+  
   const { year, month, firstDay, daysInMonth } = getMonthData(currentDate)
   const selectedMonth = `${monthNames[month]}, ${year}`
+  
+  // Filtrar dados
+  const manutencoesMarc = getManutencoesMarcadas(manutencoes)
+  const manutencoesRecentes = [...manutencoes]
+    .sort((a, b) => new Date(b.dataInicio) - new Date(a.dataInicio))
+    .slice(0, 7)
+  
+  const manutencoesDoMes = getManutencoesMesAtual(manutencoes)
+  const gastoTotal = calcularGastoTotal(manutencoesDoMes)
+  const gastosPorTipo = agruparGastosPorTipo(manutencoesDoMes)
+  const veiculoProblematico = getVeiculoMaisProblemas(manutencoes)
+  
+  // Contadores de frota
+  const frotaAtiva = caminhoes.filter(c => c.status === 'ATIVO').length
+  const frotaInativa = caminhoes.filter(c => c.status === 'INATIVO').length
+  const frotaTotal = caminhoes.length
+  
+  if (loading) {
+    return (
+      <main className="container dashboard">
+        <div style={{textAlign: 'center', padding: '2rem'}}>
+          Carregando dados...
+        </div>
+      </main>
+    )
+  }
+  
+  if (error) {
+    return (
+      <main className="container dashboard">
+        <div style={{textAlign: 'center', padding: '2rem', color: 'red'}}>
+          {error}
+        </div>
+      </main>
+    )
+  }
   
   return (
     <main className="container dashboard">
@@ -56,14 +161,14 @@ function Dashboard() {
                       month === new Date().getMonth() && 
                       year === new Date().getFullYear()
                     
-                    // Exemplo de manutenções 
-                    const isCompleted = isValidDay && [7, 8, 14].includes(dayNum)
-                    const isPending = isValidDay && [23, 28].includes(dayNum)
+                    const manutencoesNoDia = isValidDay ? getManutencaoDia(dayNum) : []
+                    const hasConcluida = manutencoesNoDia.some(m => m.dataConclusao !== null)
+                    const hasPendente = manutencoesNoDia.some(m => m.dataConclusao === null)
                     
                     return (
                       <div 
                         key={i} 
-                        className={`calendar__cell ${isCompleted ? 'completed' : ''} ${isPending ? 'pending' : ''} ${isToday ? 'today' : ''}`}
+                        className={`calendar__cell ${hasConcluida ? 'completed' : ''} ${hasPendente ? 'pending' : ''} ${isToday ? 'today' : ''}`}
                       >
                         {isValidDay ? dayNum : ''}
                       </div>
@@ -81,20 +186,26 @@ function Dashboard() {
           <div className="welcome__right">
             <div className="mini-card">
               <div className="mini-card__title">Manutenções marcadas:</div>
-              <div className="scheduled__item">
-                <span>Caminhão BRA-1234</span>
-                <span className="muted">14/08</span>
-              </div>
-              <div className="scheduled__item">
-                <span>Caminhão DRL-3214</span>
-                <span className="muted">16/09</span>
-              </div>
+              {manutencoesMarc.slice(0, 2).map((m, i) => (
+                <div key={i} className="scheduled__item">
+                  <span>{m.caminhao?.placa || 'Caminhão'}</span>
+                  <span className="muted">{formatarDataCurta(m.dataInicio)}</span>
+                </div>
+              ))}
+              {manutencoesMarc.length === 0 && (
+                <div className="scheduled__item">
+                  <span>Nenhuma manutenção marcada</span>
+                </div>
+              )}
             </div>
             <div className="mini-card notifications">
               <div className="mini-card__title">Notificações Recentes</div>
-              {Array.from({length:5}).map((_,i)=> (
-                <div key={i} className="notification__item">Combustível em 5%</div>
+              {alertas.slice(0, 5).map((alerta, i) => (
+                <div key={i} className="notification__item">{alerta.titulo || alerta.descricao}</div>
               ))}
+              {alertas.length === 0 && (
+                <div className="notification__item">Sem notificações</div>
+              )}
             </div>
           </div>
         </div>
@@ -104,10 +215,10 @@ function Dashboard() {
           </div>
           <div className="card fleet">
             <div className="fleet__title">Sua Frota</div>
-            <div className="fleet__total">300</div>
+            <div className="fleet__total">{frotaTotal}</div>
             <div className="fleet__stats">
-              <div>Ativos: <strong>150</strong></div>
-              <div>Inativos: <strong>150</strong></div>
+              <div>Ativos: <strong>{frotaAtiva}</strong></div>
+              <div>Inativos: <strong>{frotaInativa}</strong></div>
             </div>
           </div>
         </div>
@@ -126,14 +237,19 @@ function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {Array.from({length:7}).map((_,i)=> (
+              {manutencoesRecentes.map((m, i) => (
                 <tr key={i}>
-                  <td>Veículo</td>
-                  <td>Tipo</td>
-                  <td>Data</td>
-                  <td>Custo</td>
+                  <td>{m.caminhao?.placa || 'N/A'}</td>
+                  <td>{m.descServico || 'N/A'}</td>
+                  <td>{formatarData(m.dataInicio)}</td>
+                  <td>R${m.custo?.toFixed(2) || '0.00'}</td>
                 </tr>
               ))}
+              {manutencoesRecentes.length === 0 && (
+                <tr>
+                  <td colSpan="4" style={{textAlign: 'center'}}>Nenhuma manutenção registrada</td>
+                </tr>
+              )}
             </tbody>
           </table>
           <button className="btn btn--link">Ver Mais ›</button>
@@ -146,21 +262,26 @@ function Dashboard() {
           </div>
           <div className="expenses__total">
             <div className="muted">Gasto total:</div>
-            <div className="expenses__value">R$10.000</div>
+            <div className="expenses__value">R${gastoTotal.toFixed(2)}</div>
           </div>
           <div className="expenses__list">
-            {Array.from({length:7}).map((_,i)=> (
+            {gastosPorTipo.slice(0, 7).map((gasto, i) => (
               <div key={i} className="expense__item">
                 <div>
-                  <div>Gasto em Combustível:</div>
-                  <div className="muted">R$200</div>
+                  <div>Gasto em {gasto.tipo}:</div>
+                  <div className="muted">R${gasto.total.toFixed(2)}</div>
                 </div>
                 <div className="expense__right">
-                  <div>Veículo mais problema</div>
-                  <div className="muted">Data</div>
+                  <div>{veiculoProblematico?.placa || 'N/A'}</div>
+                  <div className="muted">{gasto.quantidade} manutenções</div>
                 </div>
               </div>
             ))}
+            {gastosPorTipo.length === 0 && (
+              <div className="expense__item">
+                <div>Nenhum gasto registrado este mês</div>
+              </div>
+            )}
           </div>
           <button className="btn btn--primary">📄 Relatório IA</button>
         </div>
