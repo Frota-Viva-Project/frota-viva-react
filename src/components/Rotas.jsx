@@ -1,19 +1,200 @@
 import { useState, useEffect, useRef } from 'react';
 import '../styles/Rotas.css';
+import { getMapaPorId, getCaminhaoPorId, getCoordenadasCaminhaoRota, getRotasCaminhao } from '../Utils/ManipuladorApi';
 
 function Rotas({ deliveryId, onBack }) {
   const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [rotaData, setRotaData] = useState(null);
+  const [entregaData, setEntregaData] = useState(null);
+  const [caminhaoData, setCaminhaoData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const mapaRef = useRef(null);
   const containerMapaRef = useRef(null);
   const [mapaCarregado, setMapaCarregado] = useState(false);
-  
-  const [stops, setStops] = useState([
-    { id: 1, name: 'Hospital Perinari', status: 'completed', location: 'VILA JAGUARÁ', coordinates: { lat: -23.5289, lng: -46.6997 } },
-    { id: 2, name: 'Seu Sofá', status: 'completed', location: 'VILA ROMANA', coordinates: { lat: -23.5342, lng: -46.6895 } },
-    { id: 3, name: 'BMW Motorrad Grand Brasil', status: 'pending', location: 'VILA LEOPOLDINA', coordinates: { lat: -23.5395, lng: -46.7050 } },
-    { id: 4, name: 'Mobly Megastore', status: 'pending', location: 'VILA YARA', coordinates: { lat: -23.5510, lng: -46.7180 } },
-    { id: 5, name: 'O Boticário', status: 'pending', location: 'JAGUARÉ', coordinates: { lat: -23.5450, lng: -46.7089 } }
-  ]);
+  const [localizacaoCaminhao, setLocalizacaoCaminhao] = useState(null);
+  const [marcadorCaminhao, setMarcadorCaminhao] = useState(null);
+
+  const [stops, setStops] = useState([]);
+
+  // Carregar dados da API
+  useEffect(() => {
+    const carregarDados = async () => {
+      if (!deliveryId) return;
+
+      try {
+        setLoading(true);
+        setError(null);
+
+        // 1. Carregar dados do mapa para obter informações básicas
+        console.log(`🗺️ Carregando dados do mapa via API - ID: ${deliveryId}`);
+        const mapa = await getMapaPorId(deliveryId);
+        setRotaData(mapa);
+
+        // 1.1. Buscar coordenadas específicas do mapa ID 10 (coordenadas corretas)
+        console.log(`📍 Buscando coordenadas de referência do mapa ID 10...`);
+        const mapaReferencia = await getMapaPorId(10);
+
+        if (mapaReferencia && mapaReferencia.latitude && mapaReferencia.longitude) {
+          console.log('✅ Coordenadas de referência obtidas:', {
+            lat: mapaReferencia.latitude,
+            lng: mapaReferencia.longitude
+          });
+        }
+
+        let caminhaoId = deliveryId; // Usar deliveryId como caminhaoId por padrão
+
+        if (mapa) {
+          console.log('✅ Dados do mapa carregados via API:', mapa);
+
+          // Definir localização atual do caminhão usando coordenadas do mapa ID 10 (corretas)
+          if (mapaReferencia && mapaReferencia.latitude && mapaReferencia.longitude) {
+            setLocalizacaoCaminhao({
+              lat: parseFloat(mapaReferencia.latitude),
+              lng: parseFloat(mapaReferencia.longitude),
+              endereco: mapaReferencia.destino || mapaReferencia.endereco || 'Localização de Referência'
+            });
+            console.log('📍 Localização do caminhão definida com coordenadas do mapa ID 10');
+          } else if (mapa.latitude && mapa.longitude) {
+            // Fallback para coordenadas do mapa atual
+            setLocalizacaoCaminhao({
+              lat: parseFloat(mapa.latitude),
+              lng: parseFloat(mapa.longitude),
+              endereco: mapa.destino || mapa.endereco || 'Localização atual'
+            });
+          }
+
+          // Usar ID do caminhão do mapa se disponível
+          caminhaoId = mapa.caminhao_id || mapa.caminhaoId || deliveryId;
+
+          // Processar dados de entrega
+          setEntregaData({
+            id: deliveryId,
+            enderecoDestino: mapa.destino || mapa.endereco_destino || 'Destino não informado',
+            descricaoCarga: mapa.carga || mapa.descricao_carga || 'Carga não especificada',
+            dataPrevisaoChegada: mapa.data_previsao || mapa.dataPrevisao,
+            tempoEstimado: mapa.tempo_estimado || mapa.tempoEstimado,
+            status: mapa.status || 'Em andamento',
+            caminhaoId: caminhaoId
+          });
+        }
+
+        // 2. Buscar paradas em rota do caminhão via endpoint específico
+        console.log(`🛣️ Buscando paradas em rota do caminhão ID: ${caminhaoId}`);
+        try {
+          const rotasCaminhao = await getRotasCaminhao(caminhaoId);
+
+          if (rotasCaminhao && rotasCaminhao.length > 0) {
+            console.log('📋 Dados brutos das rotas da API:', rotasCaminhao);
+
+            const paradasFormatadas = rotasCaminhao.map((rota, index) => {
+              // Processar diferentes formatos de coordenadas da API
+              let coordinates = null;
+
+              if (rota.latitude && rota.longitude) {
+                coordinates = {
+                  lat: parseFloat(rota.latitude),
+                  lng: parseFloat(rota.longitude)
+                };
+              } else if (rota.coordenadas) {
+                coordinates = {
+                  lat: parseFloat(rota.coordenadas.latitude || rota.coordenadas.lat),
+                  lng: parseFloat(rota.coordenadas.longitude || rota.coordenadas.lng)
+                };
+              }
+
+              return {
+                id: rota.id || index + 1,
+                name: rota.destinoFinal || rota.destino || rota.nome || `Parada ${index + 1}`,
+                status: rota.status === 'ATIVO' || rota.status === 'PENDENTE' ? 'pending' : 'completed',
+                location: rota.destinoInicial || rota.origem || rota.endereco || 'Localização não informada',
+                coordinates: coordinates,
+                dataPrevisao: rota.dataHoraPrevisao || rota.data_previsao,
+                observacoes: rota.observacoes || rota.descricao
+              };
+            }).filter(parada => parada.coordinates && !isNaN(parada.coordinates.lat) && !isNaN(parada.coordinates.lng));
+
+            if (paradasFormatadas.length > 0) {
+              console.log(`📍 ${paradasFormatadas.length} paradas válidas carregadas da API de rotas`);
+              setStops(paradasFormatadas);
+            } else {
+              console.log('⚠️ Nenhuma parada com coordenadas válidas encontrada');
+              // Fallback para coordenadas do mapa
+              if (mapa && mapa.latitude && mapa.longitude) {
+                setStops([{
+                  id: 1,
+                  name: mapa.destino || 'Destino Principal',
+                  status: 'pending',
+                  location: mapa.endereco || 'Localização não informada',
+                  coordinates: {
+                    lat: parseFloat(mapa.latitude),
+                    lng: parseFloat(mapa.longitude)
+                  }
+                }]);
+              }
+            }
+          } else {
+            console.log('⚠️ Nenhuma rota encontrada para o caminhão na API');
+            // Usar coordenadas do mapa como parada única se disponível
+            if (mapa && mapa.latitude && mapa.longitude) {
+              console.log('📍 Usando coordenadas do mapa como parada única');
+              setStops([{
+                id: 1,
+                name: mapa.destino || 'Destino Principal',
+                status: 'pending',
+                location: mapa.endereco || 'Localização não informada',
+                coordinates: {
+                  lat: parseFloat(mapa.latitude),
+                  lng: parseFloat(mapa.longitude)
+                }
+              }]);
+            } else {
+              console.log('⚠️ Sem coordenadas disponíveis, usando paradas padrão');
+              // Paradas padrão como último recurso
+              setStops([
+                { id: 1, name: 'Localização Atual', status: 'completed', location: 'São Paulo - SP', coordinates: { lat: -23.5405, lng: -46.7050 } },
+                { id: 2, name: 'Próximo Destino', status: 'pending', location: 'Destino não definido', coordinates: { lat: -23.5289, lng: -46.6997 } }
+              ]);
+            }
+          }
+        } catch (rotaErr) {
+          console.warn('⚠️ Erro ao buscar rotas do caminhão:', rotaErr);
+          // Em caso de erro, usar dados do mapa ou padrão
+          if (mapa && mapa.latitude && mapa.longitude) {
+            setStops([{
+              id: 1,
+              name: mapa.destino || 'Destino Principal',
+              status: 'pending',
+              location: mapa.endereco || 'Localização não informada',
+              coordinates: {
+                lat: parseFloat(mapa.latitude),
+                lng: parseFloat(mapa.longitude)
+              }
+            }]);
+          }
+        }
+
+        // 3. Carregar dados do caminhão
+        try {
+          const caminhao = await getCaminhaoPorId(caminhaoId);
+          if (caminhao) {
+            setCaminhaoData(caminhao);
+            console.log('✅ Dados do caminhão carregados:', caminhao);
+          }
+        } catch (caminhaoErr) {
+          console.warn('⚠️ Erro ao carregar dados do caminhão:', caminhaoErr);
+        }
+
+      } catch (err) {
+        console.error('❌ Erro ao carregar dados da rota via API:', err);
+        setError('Erro ao carregar dados da rota via API. Usando dados de exemplo.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    carregarDados();
+  }, [deliveryId]);
 
   // Função para carregar o script do Google Maps
   const carregarGoogleMapsScript = () => {
@@ -34,9 +215,9 @@ function Rotas({ deliveryId, onBack }) {
   const inicializarMapa = () => {
     if (!containerMapaRef.current || mapaCarregado) return;
 
-    // Coordenadas centradas na região das paradas
-    const localizacaoPadrao = { lat: -23.5405, lng: -46.7050 };
-    
+    // Usar localização do caminhão como centro, ou coordenadas padrão
+    const localizacaoPadrao = localizacaoCaminhao || { lat: -23.5405, lng: -46.7050 };
+
     // Estilos customizados para o mapa (mais profissional e clean)
     const estilosMapa = [
       {
@@ -111,10 +292,10 @@ function Rotas({ deliveryId, onBack }) {
         stylers: [{ color: '#f5f5f5' }]
       }
     ];
-    
+
     // Criar uma instância do mapa
     const opcoesMapa = {
-      zoom: 12,
+      zoom: 13,
       center: localizacaoPadrao,
       mapTypeControl: false,
       streetViewControl: false,
@@ -128,7 +309,56 @@ function Rotas({ deliveryId, onBack }) {
     mapaRef.current = mapa;
     setMapaCarregado(true);
 
-    // Adicionar marcadores para cada parada
+    // 1. Adicionar marcador do caminhão (localização atual) com ícone de pin vermelho
+    if (localizacaoCaminhao) {
+      console.log('📍 Criando marcador do caminhão na posição:', localizacaoCaminhao);
+      const marcadorCaminhaoNovo = new window.google.maps.Marker({
+        position: localizacaoCaminhao,
+        map: mapa,
+        title: `Localização do Caminhão ${caminhaoData?.placa || 'BCD2E34'}`,
+        animation: window.google.maps.Animation.BOUNCE,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 15,
+          fillColor: '#E53E3E',
+          fillOpacity: 1,
+          strokeColor: '#FFFFFF',
+          strokeWeight: 3
+        },
+        zIndex: 1000 // Garantir que fica acima dos outros marcadores
+      });
+
+      setMarcadorCaminhao(marcadorCaminhaoNovo);
+      console.log('✅ Marcador do caminhão criado com sucesso');
+
+      // Janela de informação do caminhão
+      const infowindowCaminhao = new window.google.maps.InfoWindow({
+        content: `
+          <div class="custom-infowindow">
+            <div class="infowindow-header truck">
+              <span class="infowindow-icon">📍</span>
+              <h3 class="infowindow-title">Localização do Caminhão</h3>
+            </div>
+            <div class="infowindow-content">
+              <p class="infowindow-location"><strong>Placa:</strong> ${caminhaoData?.placa || 'BCD2E34'}</p>
+              <p class="infowindow-location"><strong>Motorista:</strong> ${caminhaoData?.motorista?.nome || 'Pedro Henrique Vicente Duarte'}</p>
+              <p class="infowindow-location"><strong>Endereço:</strong> ${localizacaoCaminhao.endereco}</p>
+              <p class="infowindow-location"><strong>Coordenadas:</strong> ${localizacaoCaminhao.lat.toFixed(6)}, ${localizacaoCaminhao.lng.toFixed(6)}</p>
+              <div class="infowindow-status">
+                <span class="status-dot active"></span>
+                <span class="status-text">Localização Atual</span>
+              </div>
+            </div>
+          </div>`,
+        ariaLabel: 'Localização do Caminhão'
+      });
+
+      marcadorCaminhaoNovo.addListener('click', () => {
+        infowindowCaminhao.open(mapa, marcadorCaminhaoNovo);
+      });
+    }
+
+    // 2. Adicionar marcadores para cada parada
     stops.forEach((stop, index) => {
       if (stop.coordinates) {
         const posicao = {
@@ -136,7 +366,7 @@ function Rotas({ deliveryId, onBack }) {
           lng: stop.coordinates.lng
         };
 
-        // Criar um marcador personalizado mais bonito
+        // Criar um marcador personalizado para paradas
         const marcador = new window.google.maps.Marker({
           position: posicao,
           map: mapa,
@@ -186,8 +416,15 @@ function Rotas({ deliveryId, onBack }) {
       }
     });
 
-    // Ajustar o zoom para mostrar todos os marcadores
+    // 3. Ajustar o zoom para mostrar todos os marcadores (incluindo o caminhão)
     const bounds = new window.google.maps.LatLngBounds();
+
+    // Incluir localização do caminhão
+    if (localizacaoCaminhao) {
+      bounds.extend(new window.google.maps.LatLng(localizacaoCaminhao.lat, localizacaoCaminhao.lng));
+    }
+
+    // Incluir todas as paradas
     stops.forEach(stop => {
       if (stop.coordinates) {
         bounds.extend(new window.google.maps.LatLng(
@@ -196,17 +433,37 @@ function Rotas({ deliveryId, onBack }) {
         ));
       }
     });
-    mapa.fitBounds(bounds);
+
+    // Se há pontos para mostrar, ajustar o zoom
+    if (!bounds.isEmpty()) {
+      mapa.fitBounds(bounds);
+      // Garantir zoom mínimo
+      const listener = window.google.maps.event.addListener(mapa, 'idle', () => {
+        if (mapa.getZoom() > 16) mapa.setZoom(16);
+        window.google.maps.event.removeListener(listener);
+      });
+    }
   };
 
   // Carregar o script do Google Maps quando o componente for montado
   useEffect(() => {
     carregarGoogleMapsScript();
-    
+
     return () => {
       // O Google Maps gerencia seus próprios recursos
     };
   }, []);
+
+  // Reinicializar o mapa quando os dados mudarem
+  useEffect(() => {
+    if (mapaCarregado && !loading) {
+      // Limpar mapa existente e reinicializar
+      setMapaCarregado(false);
+      setTimeout(() => {
+        inicializarMapa();
+      }, 100);
+    }
+  }, [stops, localizacaoCaminhao, loading]);
 
   // Funções de controle do mapa
   function ampliarMapa() {
@@ -240,7 +497,7 @@ function Rotas({ deliveryId, onBack }) {
 
   const handleStopClick = (stop) => {
     setSelectedDelivery(stop);
-    
+
     // Centralizar no marcador clicado
     if (mapaRef.current && stop.coordinates) {
       mapaRef.current.setCenter(stop.coordinates);
@@ -250,20 +507,45 @@ function Rotas({ deliveryId, onBack }) {
 
   return (
     <main className="rotas-container">
-      <div className="rotas-header">
-        <div className="rotas-header__left">
-          <button className="btn-back" onClick={onBack}>
-            ← Voltar
-          </button>
-          <h1 className="rotas-title">Rotas</h1>
-        </div>
-        <div className="rotas-header__right">
-          <span className="rotas-user">Ronaldo</span>
-          <span className="rotas-date">16/07/2025</span>
-        </div>
-      </div>
+      {/* Botão de voltar estilizado */}
+      <button
+        className="btn-voltar-entregas"
+        onClick={onBack}
+        style={{
+          position: 'absolute',
+          top: '100px',
+          left: '20px',
+          zIndex: 1000,
+          backgroundColor: '#FF6B35',
+          color: 'white',
+          border: 'none',
+          borderRadius: '12px',
+          padding: '12px 20px',
+          fontSize: '14px',
+          fontWeight: '600',
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(255, 107, 53, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          transition: 'all 0.2s ease'
+        }}
+        onMouseEnter={(e) => {
+          e.target.style.backgroundColor = '#E55A2B';
+          e.target.style.transform = 'translateY(-2px)';
+          e.target.style.boxShadow = '0 6px 16px rgba(255, 107, 53, 0.4)';
+        }}
+        onMouseLeave={(e) => {
+          e.target.style.backgroundColor = '#FF6B35';
+          e.target.style.transform = 'translateY(0)';
+          e.target.style.boxShadow = '0 4px 12px rgba(255, 107, 53, 0.3)';
+        }}
+      >
+        <span style={{ fontSize: '16px' }}>←</span>
+        Voltar para Entregas
+      </button>
 
-      <div className="rotas-content">
+      <div className="rotas-content" style={{ paddingTop: '0' }}>
         <div className="rotas-map-container">
           <div ref={containerMapaRef} className="rotas-map">
             <div className="map-controls">
@@ -279,46 +561,93 @@ function Rotas({ deliveryId, onBack }) {
             <div className="rotas-details-header">
               <h2>Detalhes</h2>
             </div>
-            
-            <div className="rotas-driver-info">
-              <div className="rotas-avatar">👤</div>
-              <div className="rotas-driver-details">
-                <h3>Pedro Henrique VICENTE Duarte</h3>
-                <div className="rotas-driver-meta">
-                  <div className="meta-item">
-                    <span className="meta-label">Caminhão:</span>
-                    <span className="meta-value">QWEO-3470</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-label">Status:</span>
-                    <span className="tag tag-active">Atrasada</span>
+
+            {loading ? (
+              <div className="loading-info">
+                <p>Carregando informações...</p>
+              </div>
+            ) : (
+              <>
+                <div className="rotas-driver-info">
+                  <div className="rotas-avatar">👤</div>
+                  <div className="rotas-driver-details">
+                    <h3>{caminhaoData?.motorista?.nome || 'Pedro Henrique VICENTE Duarte'}</h3>
+                    <div className="rotas-driver-meta">
+                      <div className="meta-item">
+                        <span className="meta-label">Caminhão:</span>
+                        <span className="meta-value">{caminhaoData?.placa || 'QWEO-3470'}</span>
+                      </div>
+                      <div className="meta-item">
+                        <span className="meta-label">Status:</span>
+                        <span className="tag tag-active">
+                          {entregaData?.status || 'Atrasada'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <div className="rotas-delivery-info">
-              <div className="info-row">
-                <span className="info-label">Destino:</span>
-                <span className="info-value">Av. dos Autonomistas, 1400 - Vila Yara, Osasco - SP, 06020-010</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Número de Entrega:</span>
-                <span className="info-value">#{deliveryId || '0001'}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Conteúdo da Entrega:</span>
-                <span className="info-value">Jogos de Videogame</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Chegada Prevista:</span>
-                <span className="info-value">DD/MM/YYYY</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Tempo Estimado:</span>
-                <span className="info-value">DD/MM/YYYY - HH/MM/SS</span>
-              </div>
-            </div>
+                <div className="rotas-delivery-info">
+                  <div className="info-row">
+                    <span className="info-label">Destino:</span>
+                    <span className="info-value">
+                      {entregaData?.enderecoDestino || 'Av. dos Autonomistas, 1400 - Vila Yara, Osasco - SP, 06020-010'}
+                    </span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">Número de Entrega:</span>
+                    <span className="info-value">#{deliveryId || '0001'}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">Conteúdo da Entrega:</span>
+                    <span className="info-value">
+                      {entregaData?.descricaoCarga || 'Jogos de Videogame'}
+                    </span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">Chegada Prevista:</span>
+                    <span className="info-value">
+                      {entregaData?.dataPrevisaoChegada
+                        ? new Date(entregaData.dataPrevisaoChegada).toLocaleDateString('pt-BR')
+                        : 'DD/MM/YYYY'
+                      }
+                    </span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">Tempo Estimado:</span>
+                    <span className="info-value">
+                      {entregaData?.tempoEstimado || 'DD/MM/YYYY - HH/MM/SS'}
+                    </span>
+                  </div>
+
+                  {/* Informações da localização atual do caminhão */}
+                  {localizacaoCaminhao && (
+                    <div className="info-row" style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '18px' }}>📍</span>
+                        <span className="info-label" style={{ fontWeight: '600', color: '#E53E3E' }}>LOCALIZAÇÃO ATUAL:</span>
+                      </div>
+                      <span className="info-value" style={{ fontSize: '0.9rem', color: '#333', fontWeight: '500' }}>
+                        {localizacaoCaminhao.endereco}
+                      </span>
+                      <div style={{
+                        fontSize: '0.8rem',
+                        color: '#666',
+                        marginTop: '8px',
+                        fontFamily: 'monospace',
+                        backgroundColor: '#fff',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #e2e8f0'
+                      }}>
+                        <div>Lat: {localizacaoCaminhao.lat.toFixed(6)}</div>
+                        <div>Lng: {localizacaoCaminhao.lng.toFixed(6)}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="rotas-stops-card">

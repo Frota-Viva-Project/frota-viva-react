@@ -17,19 +17,31 @@ function Login({ onLogin, onNavigateToCadastro }) {
       const resultado = await loginWithEmailAndPassword(email, senha)
       
       if (resultado.success) {
+        const token = await resultado.user.getIdToken()
+        const dadosUsuario = {
+          nome: resultado.user.displayName || 'Usuário',
+          email: resultado.user.email,
+          uid: resultado.user.uid,
+          token: token
+        }
+
+        // Salvar token no localStorage também
+        try {
+          localStorage.setItem('frotaViva_token', token)
+        } catch (storageError) {
+          console.warn('Erro ao salvar token no localStorage:', storageError)
+        }
+
         onLogin({
           sucesso: true,
-          token: await resultado.user.getIdToken(),
-          usuario: {
-            nome: resultado.user.displayName || 'Usuário',
-            email: resultado.user.email,
-            uid: resultado.user.uid
-          }
+          token: token,
+          usuario: dadosUsuario
         })
       } else {
         setErro('Email ou senha incorretos. Tente novamente.')
       }
     } catch (erro) {
+      console.error('Erro no login:', erro)
       setErro('Erro ao fazer login. Tente novamente.')
     } finally {
       setCarregando(false)
