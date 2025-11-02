@@ -11,7 +11,9 @@ import {
   getVeiculoMaisProblemas,
   getManutencoesMesAtual,
   getTodosAlertas,
-  gerarRelatorioIA
+  gerarRelatorioIA,
+  forcarModoOnline,
+  getApiStatus
 } from '../Utils/ManipuladorApi'
 
 function Dashboard() {

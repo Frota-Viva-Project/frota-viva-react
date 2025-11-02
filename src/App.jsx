@@ -14,6 +14,7 @@ import BI from './components/BI.jsx'
 
 import { auth } from './Utils/Login.js'
 import { onAuthStateChanged } from 'firebase/auth'
+import { forcarModoOnline, login } from './Utils/ManipuladorApi.js'
 
 // Funções para gerenciar localStorage
 const salvarUsuarioLocalStorage = (usuario) => {
@@ -69,6 +70,20 @@ export default function App() {
 
   // Verificar se há usuário salvo no localStorage e validar com Firebase
   useEffect(() => {
+    // Inicializar API em produção
+    const inicializarAPI = async () => {
+      if (!import.meta.env.DEV) {
+        console.log('🌐 Inicializando API para produção...');
+        forcarModoOnline();
+        try {
+          await login();
+          console.log('✅ API autenticada com sucesso');
+        } catch (error) {
+          console.error('❌ Erro na autenticação da API:', error);
+        }
+      }
+    };
+
     const verificarAutenticacao = () => {
       // Listener para mudanças no estado de autenticação do Firebase
       const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -86,6 +101,9 @@ export default function App() {
           setUsuario(dadosUsuario)
           salvarUsuarioLocalStorage(dadosUsuario)
           setTela('app')
+
+          // Inicializar API após login do usuário
+          inicializarAPI()
         } else {
           // Não há usuário autenticado no Firebase
           // Verificar se há dados salvos no localStorage

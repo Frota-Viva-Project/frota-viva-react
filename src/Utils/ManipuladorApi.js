@@ -7,13 +7,20 @@ const AUTH_URL = import.meta.env.DEV
   : 'https://api-postgresql-kr87.onrender.com/v1/api/auth/login';
 
 const API_CREDENTIALS = {
-  username: 'frotaviva',
-  password: 'frotavia_1_2_3'
+  username: import.meta.env.VITE_API_USERNAME || 'frotaviva',
+  password: import.meta.env.VITE_API_PASSWORD || 'frotavia_1_2_3'
 };
 
 // Detectar automaticamente se deve usar dados mockados
 let USE_MOCK_DATA = false;
 let API_AVAILABLE = null; // null = não testado, true = disponível, false = indisponível
+
+// Inicialização automática para produção
+if (!import.meta.env.DEV) {
+  console.log('🌐 Modo produção detectado - forçando uso da API real');
+  API_AVAILABLE = true;
+  USE_MOCK_DATA = false;
+}
 
 // Armazenamento do token em memória
 let authToken = null;
@@ -57,6 +64,12 @@ export const login = async () => {
   loginPromise = (async () => {
     try {
       console.log('🔐 Realizando autenticação...');
+      console.log('🌐 URL de autenticação:', AUTH_URL);
+      console.log('👤 Credenciais:', {
+        username: API_CREDENTIALS.username,
+        password: API_CREDENTIALS.password ? '***' : 'VAZIA'
+      });
+
       const response = await fetch(AUTH_URL, {
         method: 'POST',
         headers: {
@@ -64,7 +77,7 @@ export const login = async () => {
           'Accept': 'application/json',
         },
         body: JSON.stringify(API_CREDENTIALS),
-        signal: AbortSignal.timeout(10000) // 10 segundos timeout
+        signal: AbortSignal.timeout(15000) // 15 segundos timeout
       });
 
       if (!response.ok) {
@@ -397,6 +410,15 @@ export const forcarModoOffline = () => {
   console.log('🔄 Forçando modo offline...');
   API_AVAILABLE = false;
   USE_MOCK_DATA = true;
+  authToken = null;
+  tokenExpiry = null;
+};
+
+// Função para forçar modo online (para produção)
+export const forcarModoOnline = () => {
+  console.log('🌐 Forçando modo online...');
+  API_AVAILABLE = true;
+  USE_MOCK_DATA = false;
   authToken = null;
   tokenExpiry = null;
 };
@@ -1344,6 +1366,7 @@ export default {
   getApiStatus,
   resetarEstadoAPI,
   forcarModoOffline,
+  forcarModoOnline,
   tentarReconectar,
   testarEndpoints,
   getManutencoesMarcadas,
